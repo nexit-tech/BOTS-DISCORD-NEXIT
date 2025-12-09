@@ -30,11 +30,12 @@ class TicketControlView(discord.ui.View):
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("Encerrando atendimento...", ephemeral=True)
         
+        # Tenta pegar o ID do usuário no tópico para remover o cargo
         user_id = None
         if interaction.channel.topic and interaction.channel.topic.isdigit():
             user_id = int(interaction.channel.topic)
         
-        # Remove o cargo
+        # Remove o cargo "Em Atendimento"
         guild = interaction.guild
         role_atendimento = guild.get_role(ROLE_ATENDIMENTO_ID)
         if user_id and role_atendimento:
@@ -45,39 +46,36 @@ class TicketControlView(discord.ui.View):
                 except:
                     pass
 
-        # Arquiva o canal
+        # --- AQUI ESTÁ A CORREÇÃO ---
         category_closed = guild.get_channel(CATEGORY_CLOSED_ID)
         if category_closed:
-            await interaction.channel.edit(category=category_closed, name=f"closed-{interaction.channel.name}")
-            await interaction.channel.set_permissions(guild.default_role, send_messages=False)
-            if user_id: 
-                member = guild.get_member(user_id)
-                if member:
-                    await interaction.channel.set_permissions(member, view_channel=False)
+            # sync_permissions=True: Apaga as permissões antigas (do usuário) e copia as da categoria
+            await interaction.channel.edit(
+                category=category_closed, 
+                name=f"closed-{interaction.channel.name}", 
+                sync_permissions=True
+            )
             
-            await interaction.channel.send(f"✅ Atendimento encerrado por {interaction.user.mention}.")
+            await interaction.channel.send(f"✅ Atendimento encerrado por {interaction.user.mention}. Permissões sincronizadas com o arquivo.")
         else:
             await interaction.followup.send("Erro: Categoria de Arquivo não encontrada.", ephemeral=True)
 
 # --- MODAL (FORMULÁRIO) ---
 class TicketModal(discord.ui.Modal, title="Abrir Novo Chamado"):
-    # Campo 1: Nome
     nome = discord.ui.TextInput(
         label="Seu Nome",
         placeholder="Como gostaria de ser chamado?",
         max_length=50
     )
-    # Campo 2: Motivo (Caixa maior para texto)
     motivo = discord.ui.TextInput(
         label="Motivo do Contato",
-        style=discord.TextStyle.paragraph, # Texto longo
+        style=discord.TextStyle.paragraph,
         placeholder="Descreva brevemente o que você precisa...",
         max_length=500,
         required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # A lógica de criar o canal agora acontece APÓS enviar o formulário
         guild = interaction.guild
         category_open = guild.get_channel(CATEGORY_OPEN_ID)
         staff_role = guild.get_role(STAFF_ROLE_ID)
@@ -88,14 +86,12 @@ class TicketModal(discord.ui.Modal, title="Abrir Novo Chamado"):
             await interaction.response.send_message("Erro interno de configuração.", ephemeral=True)
             return
 
-        # Verifica duplicidade
         channel_name = f"ticket-{interaction.user.name.lower().replace(' ', '-')}"
         existing_channel = discord.utils.get(guild.text_channels, name=channel_name)
         if existing_channel:
             await interaction.response.send_message(f"Você já possui um ticket aberto: {existing_channel.mention}", ephemeral=True)
             return
 
-        # Cria canal
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
@@ -114,20 +110,17 @@ class TicketModal(discord.ui.Modal, title="Abrir Novo Chamado"):
         except:
             pass
 
-        # --- MENSAGEM DENTRO DO TICKET (Com as respostas do Form) ---
         embed_welcome = discord.Embed(
             title="Solicitação Recebida",
             description=f"Olá {interaction.user.mention}, um membro da equipe {staff_role.mention} irá atendê-lo em breve.",
             color=0xFFFFFF
         )
-        # Adiciona os campos preenchidos no Embed
         embed_welcome.add_field(name="👤 Nome Informado", value=self.nome.value, inline=True)
         embed_welcome.add_field(name="📝 Motivo", value=self.motivo.value, inline=False)
         embed_welcome.set_footer(text="Nexit Software • Aguarde o atendimento")
 
         await ticket_channel.send(f"{interaction.user.mention} | {staff_role.mention}", embed=embed_welcome, view=TicketControlView())
 
-        # --- NOTIFICAÇÃO PARA STAFF (Com as respostas) ---
         if log_channel:
             embed_log = discord.Embed(
                 title="🔔 Novo Ticket Aberto",
@@ -143,7 +136,6 @@ class TicketModal(discord.ui.Modal, title="Abrir Novo Chamado"):
 
             await log_channel.send(embed=embed_log, view=view_link)
 
-        # Resposta final para quem clicou no botão (invisível para outros)
         await interaction.response.send_message(f"Ticket criado com sucesso: {ticket_channel.mention}", ephemeral=True)
 
 # --- VIEW DO PAINEL PRINCIPAL ---
@@ -153,14 +145,13 @@ class MainTicketView(discord.ui.View):
 
     @discord.ui.button(label="Iniciar Atendimento", style=discord.ButtonStyle.primary, custom_id="btn_open_ticket")
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Aqui está a mágica: Abre o Modal em vez de criar o canal direto
         await interaction.response.send_modal(TicketModal())
 
 # --- EVENTOS ---
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Suporte (V3 Com Modal) Logado')
+    print(f'✅ Bot Suporte (V4 Sync Permissions) Logado')
     bot.add_view(MainTicketView())
     bot.add_view(TicketControlView())
 
